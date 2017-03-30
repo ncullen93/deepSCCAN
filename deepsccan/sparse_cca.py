@@ -3,28 +3,8 @@ Sparse CCA Model with Linear and Non-Linear Activations
 """
 
 import tensorflow as tf
-
-
-class Test(object):
-
-    def __init__(self):
-        tf.reset_default_graph()
-
-    def start(self):
-        with tf.variable_scope('test'):
-            x = tf.get_variable('nick', initializer=20.)
-            x += 2
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            print(sess.run(x))
-        # self.x = x
-
-    def stop(self):
-        with tf.variable_scope('test', reuse=True):
-            x = tf.get_variable('nick')
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            print(sess.run(x))
+from tensorflow.contrib import metrics
+import numpy as np
 
 
 class SparseCCA(object):
@@ -35,8 +15,8 @@ class SparseCCA(object):
     def __init__(self,
                  nvecs,
                  activation='linear',
-                 sparsity=(0, 0),
-                 smoothness=(0, 0),
+                 sparsity=(0., 0.),
+                 smoothness=(0., 0.),
                  nonneg=False):
         """
         Initialize Sparse CCA Model
@@ -72,12 +52,8 @@ class SparseCCA(object):
         self.sess = tf.Session()
 
     def process_inputs(self, x, y):
-        # flatten inputs
         x = x.reshape(x.shape[0], -1)
         y = y.reshape(y.shape[0], -1)
-        # extra dimension for the single batch
-        x = np.expand_dims(x, 0)
-        y = np.expand_dims(y, 0)
         return x, y
 
     def parse_activation(self, value):
@@ -97,12 +73,16 @@ class SparseCCA(object):
         -----
         - weights should be constrained unit norm
         """
-        x_proj = time_distributed_dense_layer(x, units=self.nvecs,
-                                              activation=self.activation,
-                                              name='x_proj')
-        y_proj = time_distributed_dense_layer(y, units=self.nvecs,
-                                              activation=self.activation,
-                                              name='y_proj')
+        x_proj = time_distributed_dense(x, units=self.nvecs,
+                                        activation=self.activation,
+                                        sparsity=self.sparse_x,
+                                        smoothness=self.smooth_x,
+                                        name='x_proj')
+        y_proj = time_distributed_dense(y, units=self.nvecs,
+                                        activation=self.activation,
+                                        sparsity=self.sparse_y,
+                                        smoothness=self.smooth_y,
+                                        name='y_proj')
 
         return x_proj, y_proj
 
@@ -110,14 +90,15 @@ class SparseCCA(object):
         """
         Unconstrained mininimzation
         """
-        cca_score = tf.reduce_sum(
-            tf.diag_part(
-                tf.squeeze(
-                    tf.matmul(
-                        tf.transpose(tf.squeeze(x_proj)), tf.squeeze(y_proj)))))
-        return -1 * cca_score
+        covar_mat = tf.matmul(tf.transpose(x_proj), y_proj)
+        cca_score = tf.reduce_sum(tf.diag_part(covar_mat))
+        #diag_sum = 2. * tf.reduce_mean(tf.diag_part(covar_mat))
+        #inter_sum = tf.reduce_mean(tf.matrix_band_part(covar_mat, 0, -1))
+        #cca_score = diag_sum - inter_sum
+        reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+        return tf.add(cca_score, tf.add_n(reg_losses))
 
-    def _training(self, loss, optimizer, learn_rate):
+    def _train_op(self, loss, optimizer, learn_rate):
         """
         Returns training op from loss tensor
         """
@@ -128,8 +109,19 @@ class SparseCCA(object):
         train_op = opt.minimize(loss)
         return train_op
 
-    def evaluate(self, x, y):
-        x_proj, y_proj = self.inference(x, y)
+    def _eval_op(self, x_proj, y_proj):
+        """
+        Returns evaluation op from x and y projections
+        """
+        corr_vals = []
+        update_ops = []
+        for i in range(self.nvecs):
+            corr_val, update_op = metrics.streaming_pearson_correlation(x_proj[:,i], y_proj[:,i])
+            corr_vals.append(corr_val)
+            update_ops.append(update_op)
+        #corr_op = tf.group(*corr_vals)
+        update_op = tf.group(*update_ops)
+        return corr_vals, update_op
 
     def fit(self, x, y, nb_epoch=100, batch_size=16,
             optimizer='adam', learn_rate=1e-3, verbose=True):
@@ -140,33 +132,50 @@ class SparseCCA(object):
         x_array, y_array = self.process_inputs(x, y)
 
         # create placeholders
-        x_place = tf.placeholder(tf.float32, [1, None, x_array.shape[-1]])
-        y_place = tf.placeholder(tf.float32, [1, None, y_array.shape[-1]])
+        x_place = tf.placeholder(tf.float32, [None, x_array.shape[-1]],
+                                 name='x_placeholder')
+        y_place = tf.placeholder(tf.float32, [None, y_array.shape[-1]],
+                                 name='y_placeholder')
 
         # create weight variables
         x_proj, y_proj = self._inference(x_place, y_place)
         loss = self._loss(x_proj, y_proj)
-        train_op = self._training(loss, optimizer, learn_rate)
+        train_op = self._train_op(loss, optimizer, learn_rate)
+        corr_vals, eval_update_op = self._eval_op(x_proj, y_proj)
 
         # ops to clip weights so they have unit norm
         maxnorm_ops = tf.get_collection("maxnorm")
 
         nb_batches = int(np.ceil(x_array.shape[1] / float(batch_size)))
-        init_op = tf.global_variables_initializer()
+        init_op = tf.group(tf.global_variables_initializer(),
+                           tf.local_variables_initializer())
         self.sess.run(init_op)
 
         for epoch in range(nb_epoch):
             x_batches = np.array_split(x_array, nb_batches, axis=1)
             y_batches = np.array_split(y_array, nb_batches, axis=1)
             for x_batch, y_batch in zip(x_batches, y_batches):
-                _loss, _ = self.sess.run([loss, train_op],
+                batch_loss, _, _ = self.sess.run([loss, train_op, eval_update_op],
                                      feed_dict={x_place: x_batch,
                                                 y_place: y_batch})
                 # clip max norm of weights
                 self.sess.run(maxnorm_ops)
-                print('Loss: %.02f' % (_loss))
+                # update corr values after weight updates
+                self.sess.run(eval_update_op)
+
+                print('Loss: %.02f' % (batch_loss))
+                c_vals = [cca_model.sess.run(c) for c in corr_vals]
+                print('Avg Comp. Corr: %.02f' % np.mean([c_vals]))
+        # store variables for prediction & evaluation
+        self.x_place = x_place
+        self.y_place = y_place
+        self.x_proj = x_proj
+        self.y_proj = y_proj
 
     def predict(self, x, y):
+        if self.x_place is None:
+            raise Exception('Must fit model first!')
+
         x_array, y_array = self.process_inputs(x, y)
 
         x_proj, y_proj = self.sess.run([self.x_proj, self.y_proj],
@@ -179,7 +188,7 @@ class SparseCCA(object):
         self.sess.close()
 
 
-def maxnorm_regularizer(threshold, axes=1, name='maxnorm', collection='maxnorm'):
+def maxnorm_regularizer(threshold, axes=0, name='maxnorm', collection='maxnorm'):
     def maxnorm(weights):
         clipped = tf.clip_by_norm(weights, clip_norm=threshold, axes=axes)
         clip_weights = tf.assign(weights, clipped, name=name)
@@ -188,17 +197,41 @@ def maxnorm_regularizer(threshold, axes=1, name='maxnorm', collection='maxnorm')
     return maxnorm
 
 
-def time_distributed_dense_layer(x, units, activation, name):
+def l1l2_regularizer(l1_penalty, l2_penalty):
+    def l1l2(weights):
+        l1_score = tf.multiply(tf.reduce_sum(tf.abs(weights)), 
+                        tf.convert_to_tensor(l1_penalty, dtype=tf.float32))
+        l2_score = tf.multiply(tf.nn.l2_loss(weights),
+                               tf.convert_to_tensor(l2_penalty, dtype=tf.float32))
+        return tf.add_n([l1_score, l2_score])
+    return l1l2
+
+
+def maxnorm_l1l2_regularizer(threshold, axes, l1_penalty, l2_penalty):
+    def maxnorm_l1l2(weights):
+        clipped = tf.clip_by_norm(weights, clip_norm=threshold, axes=axes)
+        clip_weights = tf.assign(weights, clipped, name='maxnorm')
+        tf.add_to_collection('maxnorm', clip_weights)
+        l1_score = tf.multiply(tf.reduce_sum(tf.abs(weights)), 
+                        tf.convert_to_tensor(l1_penalty, dtype=tf.float32))
+        l2_score = tf.multiply(tf.nn.l2_loss(weights),
+                               tf.convert_to_tensor(l2_penalty, dtype=tf.float32))
+        final_score = tf.add_n([l1_score, l2_score])
+        #tf.add_to_collection('losses', final_score)
+        return final_score
+    return maxnorm_l1l2
+
+def time_distributed_dense(x, units, activation, sparsity, smoothness, name):
     """
     Layer that applies a dense matrix multiplication across
     all the samples as if they were one sample
     """
-    input_shape = x.shape.as_list()
-    x = tf.reshape(x, [-1, input_shape[2]])
+    #input_shape = x.shape.as_list()
+    #x = tf.reshape(x, [-1, input_shape[2]])
     y = tf.layers.dense(x, units=units, activation=activation,
-                        kernel_regularizer=maxnorm_regularizer(1.0),
-                        name=name)
-    y = tf.reshape(y, [1, -1, units])
+            kernel_regularizer=maxnorm_l1l2_regularizer(1.0, 0, sparsity, smoothness),
+            name=name)
+    #y = tf.reshape(y, [1, -1, units])
     return y
 
 
@@ -215,46 +248,13 @@ def cca_score_layer(x_proj, y_proj):
 
 # TEST TIME-DISTRIBUTED-DENSE
 if __name__ == '__main__':
-    import numpy as np
-    import tensorflow as tf
-    from keras.datasets import mnist
+    RUN_EXAMPLE = False
+    if RUN_EXAMPLE:
+        from keras.datasets import mnist
 
-    (xtrain, ytrain), (xtest, ytest) = mnist.load_data()
-    xx = xtrain[:100]
-    yy = xtrain[100:200]
-    
-    cca_model = SparseCCA(nvecs=10, activation='linear')
-    cca_model.fit(xx, yy, nb_epoch=5, batch_size=16)
-
-
-    s="""
-    x_array, y_array = cca_model.process_inputs(xx, yy)
-    x_place = tf.placeholder(tf.float32, [1, None, x_array.shape[2]])
-    y_place = tf.placeholder(tf.float32, [1, None, y_array.shape[2]])
-    x_proj, y_proj = cca_model.inference(x_place, y_place)
-    loss = cca_model.loss(x_proj, y_proj)
-    train_op = cca_model.training(loss, optimizer='adam', learn_rate=1e-3)
-
-    maxnorm_ops = tf.get_collection("maxnorm")
-
-    nb_batches = int(np.ceil(x_array.shape[1] / float(16)))
-    init_op = tf.global_variables_initializer()
-    cca_model.sess.run(init_op)
-
-    x_batch = x_array[:, :12, :]
-    y_batch = y_array[:, :12, :]
-
-    # run train step
-    _loss, _ = cca_model.sess.run([loss, train_op],
-                              feed_dict={
-                                x_place: x_batch,
-                                y_place: y_batch
-                              })
-
-    # check that weights have unit norm
-    with tf.variable_scope('x_proj', reuse=True):
-        xw = cca_model.sess.run(tf.get_variable('kernel'))
-    with tf.variable_scope('y_proj', reuse=True):
-        yw = cca_model.sess.run(tf.get_variable('kernel'))
-    """    
-
+        (xtrain, ytrain), (xtest, ytest) = mnist.load_data()
+        xx = xtrain[:100]
+        yy = xtrain[100:200]
+        
+        cca_model = SparseCCA(nvecs=10, activation='linear')
+        cca_model.fit(xx, yy, nb_epoch=5, batch_size=16)
