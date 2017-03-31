@@ -91,10 +91,9 @@ class SparseCCA(object):
         Unconstrained mininimzation
         """
         covar_mat = tf.matmul(tf.transpose(x_proj), y_proj)
-        cca_score = tf.reduce_sum(tf.diag_part(covar_mat))
-        #diag_sum = 2. * tf.reduce_mean(tf.diag_part(covar_mat))
-        #inter_sum = tf.reduce_mean(tf.matrix_band_part(covar_mat, 0, -1))
-        #cca_score = diag_sum - inter_sum
+        diag_sum = tf.reduce_sum(tf.abs(tf.diag_part(covar_mat)))
+        inter_sum = tf.reduce_sum(tf.abs(tf.matrix_band_part(covar_mat, 0, -1)))
+        cca_score = tf.multiply(-1., diag_sum - inter_sum)
         reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
         return tf.add(cca_score, tf.add_n(reg_losses))
 
@@ -113,18 +112,11 @@ class SparseCCA(object):
         """
         Returns evaluation op from x and y projections
         """
-        corr_vals = []
-        update_ops = []
-        for i in range(self.nvecs):
-            corr_val, update_op = metrics.streaming_pearson_correlation(x_proj[:,i], y_proj[:,i])
-            corr_vals.append(corr_val)
-            update_ops.append(update_op)
-        #corr_op = tf.group(*corr_vals)
-        update_op = tf.group(*update_ops)
-        return corr_vals, update_op
+        corr_vals = tf_pearson_correlation(x_proj, y_proj)
+        return corr_vals
 
     def fit(self, x, y, nb_epoch=100, batch_size=16,
-            optimizer='adam', learn_rate=1e-3, verbose=True):
+            optimizer='adam', learn_rate=1e-5, verbose=True):
         """
         Fit the Sparse CCA model
         """
@@ -141,31 +133,35 @@ class SparseCCA(object):
         x_proj, y_proj = self._inference(x_place, y_place)
         loss = self._loss(x_proj, y_proj)
         train_op = self._train_op(loss, optimizer, learn_rate)
-        corr_vals, eval_update_op = self._eval_op(x_proj, y_proj)
+        corr_vals = self._eval_op(x_proj, y_proj)
 
         # ops to clip weights so they have unit norm
         maxnorm_ops = tf.get_collection("maxnorm")
 
         nb_batches = int(np.ceil(x_array.shape[1] / float(batch_size)))
-        init_op = tf.group(tf.global_variables_initializer(),
-                           tf.local_variables_initializer())
+        init_op = tf.global_variables_initializer()
+
         self.sess.run(init_op)
 
         for epoch in range(nb_epoch):
-            x_batches = np.array_split(x_array, nb_batches, axis=1)
-            y_batches = np.array_split(y_array, nb_batches, axis=1)
-            for x_batch, y_batch in zip(x_batches, y_batches):
-                batch_loss, _, _ = self.sess.run([loss, train_op, eval_update_op],
+            for batch_idx in range(nb_batches):
+                x_batch = x_array[batch_idx*batch_size:(batch_idx+1)*batch_size]
+                y_batch = y_array[batch_idx*batch_size:(batch_idx+1)*batch_size]
+
+                batch_loss, _ = self.sess.run([loss, train_op],
                                      feed_dict={x_place: x_batch,
                                                 y_place: y_batch})
                 # clip max norm of weights
                 self.sess.run(maxnorm_ops)
-                # update corr values after weight updates
-                self.sess.run(eval_update_op)
+                if verbose:
+                    print('Loss: %.02f' % (batch_loss))
 
-                print('Loss: %.02f' % (batch_loss))
-                c_vals = [cca_model.sess.run(c) for c in corr_vals]
-                print('Avg Comp. Corr: %.02f' % np.mean([c_vals]))
+                if verbose and batch_idx % 10 == 0:
+                    batch_corr_vals = self.sess.run(corr_vals,
+                                            feed_dict={x_place:x_batch,
+                                                       y_place: y_batch})
+                    print('Corrs: ' , batch_corr_vals)
+
         # store variables for prediction & evaluation
         self.x_place = x_place
         self.y_place = y_place
@@ -179,14 +175,31 @@ class SparseCCA(object):
         x_array, y_array = self.process_inputs(x, y)
 
         x_proj, y_proj = self.sess.run([self.x_proj, self.y_proj],
-                                       feed_dict={self.x_place: x,
-                                                  self.y_place: y})
+                                       feed_dict={self.x_place: x_array,
+                                                  self.y_place: y_array})
 
         return x_proj, y_proj
 
     def __del__(self):
         self.sess.close()
 
+
+def tf_pearson_correlation(x_proj, y_proj):
+    """
+    Calculate pearson R correlation matrix between
+    two matrices of shape (samples, nvecs) and returns
+    the *nvecs* correlation coefficients btwn the corresponding
+    i'th columns in each of the two matrices
+    """
+    mx = tf.reduce_mean(x_proj, axis=0)
+    my = tf.reduce_mean(y_proj, axis=0)
+    xm = x_proj - mx
+    ym = y_proj - my
+    r_num = tf.matmul(tf.transpose(xm), ym)
+    r_den = tf.sqrt(tf.reduce_sum(tf.square(xm), axis=0) * tf.reduce_sum(tf.square(ym), axis=0))
+    r_mat = tf.divide(r_num, r_den)
+    r_vals = tf.diag_part(r_mat)
+    return r_vals
 
 def maxnorm_regularizer(threshold, axes=0, name='maxnorm', collection='maxnorm'):
     def maxnorm(weights):
@@ -230,7 +243,7 @@ def time_distributed_dense(x, units, activation, sparsity, smoothness, name):
     #x = tf.reshape(x, [-1, input_shape[2]])
     y = tf.layers.dense(x, units=units, activation=activation,
             kernel_regularizer=maxnorm_l1l2_regularizer(1.0, 0, sparsity, smoothness),
-            name=name)
+            use_bias=False, name=name)
     #y = tf.reshape(y, [1, -1, units])
     return y
 
