@@ -73,12 +73,12 @@ class SparseCCA(object):
         -----
         - weights should be constrained unit norm
         """
-        x_proj = time_distributed_dense(x, units=self.nvecs,
+        x_proj = dense_layer(x, units=self.nvecs,
                                         activation=self.activation,
                                         sparsity=self.sparse_x,
                                         smoothness=self.smooth_x,
                                         name='x_proj')
-        y_proj = time_distributed_dense(y, units=self.nvecs,
+        y_proj = dense_layer(y, units=self.nvecs,
                                         activation=self.activation,
                                         sparsity=self.sparse_y,
                                         smoothness=self.smooth_y,
@@ -88,14 +88,16 @@ class SparseCCA(object):
 
     def _loss(self, x_proj, y_proj):
         """
-        Unconstrained mininimzation
+        Value to MINIMIZE
         """
         covar_mat = tf.matmul(tf.transpose(x_proj), y_proj)
         diag_sum = tf.reduce_sum(tf.abs(tf.diag_part(covar_mat)))
-        inter_sum = tf.reduce_sum(tf.abs(tf.matrix_band_part(covar_mat, 0, -1)))
-        cca_score = tf.multiply(-1., diag_sum - inter_sum)
+        cca_score = tf.multiply(-1., diag_sum)
+        #inter_sum = tf.reduce_sum(tf.abs(tf.matrix_band_part(covar_mat, 0, -1)))
+        #cca_score = tf.multiply(-1., diag_sum - inter_sum) 
         reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-        return tf.add(cca_score, tf.add_n(reg_losses))
+        total_loss = cca_score + tf.add_n(reg_losses)
+        return total_loss
 
     def _train_op(self, loss, optimizer, learn_rate):
         """
@@ -216,47 +218,24 @@ def l1l2_regularizer(l1_penalty, l2_penalty):
                         tf.convert_to_tensor(l1_penalty, dtype=tf.float32))
         l2_score = tf.multiply(tf.nn.l2_loss(weights),
                                tf.convert_to_tensor(l2_penalty, dtype=tf.float32))
-        return tf.add_n([l1_score, l2_score])
+        return tf.add(l1_score, l2_score)
     return l1l2
 
-
-def maxnorm_l1l2_regularizer(threshold, axes, l1_penalty, l2_penalty):
-    def maxnorm_l1l2(weights):
-        clipped = tf.clip_by_norm(weights, clip_norm=threshold, axes=axes)
-        clip_weights = tf.assign(weights, clipped, name='maxnorm')
-        tf.add_to_collection('maxnorm', clip_weights)
-        l1_score = tf.multiply(tf.reduce_sum(tf.abs(weights)), 
-                        tf.convert_to_tensor(l1_penalty, dtype=tf.float32))
-        l2_score = tf.multiply(tf.nn.l2_loss(weights),
-                               tf.convert_to_tensor(l2_penalty, dtype=tf.float32))
-        final_score = tf.add_n([l1_score, l2_score])
-        #tf.add_to_collection('losses', final_score)
-        return final_score
-    return maxnorm_l1l2
-
-def time_distributed_dense(x, units, activation, sparsity, smoothness, name):
+def dense_layer(x, units, activation, sparsity, smoothness, name):
     """
     Layer that applies a dense matrix multiplication across
     all the samples as if they were one sample
     """
-    #input_shape = x.shape.as_list()
-    #x = tf.reshape(x, [-1, input_shape[2]])
     y = tf.layers.dense(x, units=units, activation=activation,
-            kernel_regularizer=maxnorm_l1l2_regularizer(1.0, 0, sparsity, smoothness),
+            kernel_regularizer=l1l2_regularizer(l1_penalty=sparsity, l2_penalty=smoothness),
             use_bias=False, name=name)
-    #y = tf.reshape(y, [1, -1, units])
+    # create clip norm function
+    with tf.variable_scope(name, reuse=True):
+        weights = tf.get_variable('kernel')
+        clipped = tf.clip_by_norm(weights, clip_norm=1.0, axes=0)
+        clip_weights = tf.assign(weights, clipped, name='maxnorm')
+        tf.add_to_collection('maxnorm', clip_weights)
     return y
-
-
-def cca_score_layer(x_proj, y_proj):
-    """
-    Calculates the CCA objective value from the
-    two projections
-    """
-    output = tf.matmul(x_proj, y_proj)
-    output_square = tf.square(output)
-    output_sum = tf.reduce_sum(output_square)
-    return output_sum
 
 
 # TEST TIME-DISTRIBUTED-DENSE
