@@ -1,5 +1,5 @@
 """
-Simple example - learn one component
+Traditional (No Sparsity) CCA to learn one ground truth component
 """
 
 import numpy as np
@@ -57,28 +57,20 @@ def generate_data_2():
     return X, Y, v1, v2, u
 
 ## BUILD MODEL ##
-
-def l1l2_regularizer(l1_penalty, l2_penalty):
-    def l1l2(weights):
-        l1_score = tf.multiply(tf.reduce_sum(tf.abs(weights)), 
-                        tf.convert_to_tensor(l1_penalty, dtype=tf.float32))
-        l2_score = tf.multiply(tf.nn.l2_loss(weights),
-                               tf.convert_to_tensor(l2_penalty, dtype=tf.float32))
-        return tf.add(l1_score, l2_score)
-    return l1l2
-
-def dense_layer(x, units, name, sparsity=0., smoothness=0.):
-    if sparsity > 0. or smoothness > 0.:
-        regularizer = l1l2_regularizer(l1_penalty=sparsity, l2_penalty=smoothness)
-    else:
-        regularizer = None
+def dense_layer(x, units, smoothness=1., name='dense'):
+    #if sparsity > 0. or smoothness > 0.:
+    #    regularizer = l1_regularizer(l1_penalty=sparsity)
+    #else:
+    regularizer = None
     
     y = tf.layers.dense(x, units=units, activation=None,
             kernel_regularizer=regularizer, use_bias=False, name=name)
     # create clip norm function
     with tf.variable_scope(name, reuse=True):
         weights = tf.get_variable('kernel')
-        clipped = tf.clip_by_norm(weights, clip_norm=1.0, axes=0)
+        ss = tf.convert_to_tensor(smoothness, dtype=tf.float32)
+        clipped = weights * tf.sqrt(ss) * tf.rsqrt(tf.reduce_sum(tf.square(weights)))
+        #clipped = tf.clip_by_norm(weights, clip_norm=1.0, axes=0)
         clip_weights = tf.assign(weights, clipped, name='maxnorm')
         tf.add_to_collection('maxnorm', clip_weights)
 
@@ -107,15 +99,13 @@ def tf_pearson_correlation(x_proj, y_proj):
     return r_vals
 
 ## Hyper-params
-NVECS = 2
-LEARN_RATE = 1e-4
-NB_EPOCH = 7000
+NVECS = 1
+LEARN_RATE = 5e-3
+NB_EPOCH = 1000
 BATCH_SIZE = 50
-X_SPARSE, Y_SPARSE = 3., 3.
-X_SMOOTH, Y_SMOOTH = 1., 1.
+X_SMOOTH = Y_SMOOTH = 1.
 
-
-x_array, y_array, v1, v2, u = generate_data_2()
+x_array, y_array, v1, v2, u = generate_data()
 real_x_proj = np.dot(x_array.T, v1)
 real_y_proj = np.dot(y_array.T, v2)
 
@@ -126,29 +116,14 @@ tf.reset_default_graph()
 x_place = tf.placeholder(tf.float32, shape=(None, x_array.shape[-1]), name='x_place')
 y_place = tf.placeholder(tf.float32, shape=(None, y_array.shape[-1]), name='y_place')
 
-x_proj = dense_layer(x_place, units=NVECS, name='x_proj', 
-                     sparsity=X_SPARSE, smoothness=X_SMOOTH)
-y_proj = dense_layer(y_place, units=NVECS, name='y_proj',
-                     sparsity=Y_SPARSE, smoothness=Y_SMOOTH)
+x_proj = dense_layer(x_place, units=NVECS, smoothness=X_SMOOTH, name='x_proj')
+y_proj = dense_layer(y_place, units=NVECS, smoothness=Y_SMOOTH, name='y_proj')
 
-covar_mat = tf.matmul(tf.transpose(x_proj), y_proj)
-# sum of diagonal
-diag_sum = tf.trace(tf.abs(covar_mat))
-#diag_sum = tf.reduce_sum(tf.abs(tf.diag_part(covar_mat)))
-# reverse sign for minimization
-cca_loss = tf.multiply(-1., diag_sum)
-
-## add regularization losses
-reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-if len(reg_losses) > 0:
-    reg_loss = tf.add_n(reg_losses) 
-    ## total loss
-    total_loss = tf.add(cca_loss, reg_loss)
-else:
-    total_loss = cca_loss
+cca_loss = tf.trace(tf.matmul(tf.transpose((x_proj - y_proj)), (x_proj - y_proj)))
+total_loss = cca_loss
 
 ## create optimizer and train op
-optimizer = tf.train.AdamOptimizer(learning_rate=LEARN_RATE)
+optimizer = tf.train.MomentumOptimizer(learning_rate=LEARN_RATE, momentum=0.9)
 train_op = optimizer.minimize(total_loss)
 
 ## create eval op
@@ -170,7 +145,7 @@ with tf.Session() as sess:
                                 feed_dict={x_place:x_batch,
                                            y_place:y_batch})
             sess.run(maxnorm_ops)
-            print('Loss %.02f' % loss)
+            #print('Loss %.02f' % loss)
 
     # get components and projects
     with tf.variable_scope('', reuse=True):
@@ -180,7 +155,9 @@ with tf.Session() as sess:
 
 # plot
 for i in range(NVECS):
+    print('\nCOMPONENT %i' % i)
     plt.scatter(np.arange(xw.shape[0]), xw[:,i])
     plt.show()
     plt.scatter(np.arange(yw.shape[0]), yw[:,i])
     plt.show()
+    print('\n')

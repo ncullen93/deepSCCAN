@@ -44,7 +44,7 @@ def dense_layer(x, units, activation, name, sparsity=0., smoothness=0.):
         regularizer = l1l2_regularizer(l1_penalty=sparsity, l2_penalty=smoothness)
     else:
         regularizer = None
-    output = tf.layers.dense(x, units=units, activation=activation,
+    y = tf.layers.dense(x, units=units, activation=activation,
             kernel_regularizer=regularizer, use_bias=False, name=name)
     # create clip norm function
     with tf.variable_scope(name, reuse=True):
