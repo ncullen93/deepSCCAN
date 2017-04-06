@@ -1,4 +1,9 @@
 """
+Deep Feedforward CCA
+"""
+
+
+"""
 Standard CCA model which learns components one-by-one,
 applying matrix deflation after each component.
 """
@@ -74,14 +79,18 @@ def matrix_deflation(X_curr, Y_curr, X_orig, Y_orig, u, v):
     return Xp, Yp
 
 
-class SparseCCA(object):
+class DeepCCA(object):
 
     def __init__(self,
+                 x_hidden,
+                 y_hidden,
                  nvecs,
                  activation='linear',
                  sparsity=0.,
                  nonneg=False,
                  deflation=True):
+        self._x_hidden = x_hidden
+        self._y_hidden = y_hidden
         self.nvecs = nvecs
         self.activation = self._parse_activation(activation)
 
@@ -118,13 +127,23 @@ class SparseCCA(object):
         return x_array, y_array
 
     def _inference(self, x_place, y_place):
-        if self._deflation:
-            units = 1
-        else:
-            units = self.nvecs
-        x_proj = dense_layer(x_place, units=units, sparsity=self.sparsity[0], 
+        # first hidden projections
+        if len(self._x_hidden) > 0:
+            x_proj = dense_layer(x_place, units=self._x_hidden[0], activation=self.activation,
+                        sparsity=self.sparsity[0], nonneg=self._nonneg, name='x_proj_0')
+        if len(self._y_hidden) > 0:
+            y_proj = dense_layer(y_place, units=self._y_hidden[1], activation=self.activation,
+                        sparsity=self.sparsity[1], nonneg=self._nonneg, name='x_proj_0')
+        for x_hidden in self._x_hidden[1:]:
+            x_proj = dense_layer(x_proj, units=x_hidden, activation=self.activation,
+                        sparsity=self.sparsity[0], nonneg=self._nonneg, name='x_proj_0')
+        for y_hidden in self._y_hidden[1:]:
+            y_proj = dense_layer(x_proj, units=x_hidden, activation=self.activation,
+                        sparsity=self.sparsity[0], nonneg=self._nonneg, name='x_proj_0')
+        # final layer          
+        x_proj = dense_layer(x_proj, units=self.nvecs, sparsity=self.sparsity[0], 
                              nonneg=self._nonneg, name='x_proj')
-        y_proj = dense_layer(y_place, units=units, sparsity=self.sparsity[1], 
+        y_proj = dense_layer(y_proj, units=self.nvecs, sparsity=self.sparsity[1], 
                              nonneg=self._nonneg, name='y_proj')
         return x_proj, y_proj
 
@@ -262,7 +281,7 @@ if __name__ == '__main__':
     if EXAMPLE == 'SYNTHETIC':
         x_array, y_array, v1, v2, u = generate_data()
 
-        model = SparseCCA(nvecs=2, sparsity=(0.5,0.5), nonneg=False, deflation=False)
+        model = DeepCCA(nvecs=2, sparsity=(0.5,0.5), nonneg=False, deflation=False)
         model.fit(x_array, y_array, nb_epoch=2000, batch_size=500, learn_rate=1e-5)
 
         xw, yw = model.x_components, model.y_components
@@ -286,7 +305,7 @@ if __name__ == '__main__':
         x = images[:,:,:32]
         y = images[:,:,32:]
         nvecs = 8
-        model = SparseCCA(nvecs=nvecs, sparsity=(0.05,0.05), deflation=False)
+        model = DeepCCA(nvecs=nvecs, sparsity=(0.05,0.05), deflation=False)
         model.fit(x, y, nb_epoch=300, batch_size=40, learn_rate=1e-4)
         
         xw, yw = model.x_components, model.y_components
@@ -308,7 +327,7 @@ if __name__ == '__main__':
         y = xtrain[:5000,:,14:]
 
         nvecs = 5
-        model = SparseCCA(nvecs=nvecs, sparsity=(0.01,0.01), deflation=False)
+        model = DeepCCA(nvecs=nvecs, sparsity=(0.01,0.01), deflation=False)
         model.fit(x, y, nb_epoch=300, batch_size=64, learn_rate=1e-4)
 
         xw, yw = model.x_components, model.y_components
@@ -345,7 +364,7 @@ if __name__ == '__main__':
                 y[i] = 0.
 
         nvecs = 5
-        model = SparseCCA(nvecs=nvecs, sparsity=100., deflation=False)
+        model = DeepCCA(nvecs=nvecs, sparsity=100., deflation=False)
         model.fit(x, y, nb_epoch=300, batch_size=200, learn_rate=1e-4)
         xw, yw = model.x_components, model.y_components
         xw = xw.reshape(28,28,nvecs)
