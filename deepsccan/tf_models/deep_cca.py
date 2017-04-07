@@ -127,20 +127,26 @@ class DeepCCA(object):
         return x_array, y_array
 
     def _inference(self, x_place, y_place):
-        # first hidden projections
+        """
+        Forward pass
+        """
+        ## X HIDDEN LAYERS
         if len(self._x_hidden) > 0:
             x_proj = dense_layer(x_place, units=self._x_hidden[0], activation=self.activation,
                         sparsity=self.sparsity[0], nonneg=self._nonneg, name='x_proj_0')
-        if len(self._y_hidden) > 0:
-            y_proj = dense_layer(y_place, units=self._y_hidden[1], activation=self.activation,
-                        sparsity=self.sparsity[1], nonneg=self._nonneg, name='x_proj_0')
         for x_hidden in self._x_hidden[1:]:
             x_proj = dense_layer(x_proj, units=x_hidden, activation=self.activation,
                         sparsity=self.sparsity[0], nonneg=self._nonneg, name='x_proj_0')
+
+        ## Y HIDDEN LAYERS
+        if len(self._y_hidden) > 0:
+            y_proj = dense_layer(y_place, units=self._y_hidden[1], activation=self.activation,
+                        sparsity=self.sparsity[1], nonneg=self._nonneg, name='x_proj_0')
         for y_hidden in self._y_hidden[1:]:
             y_proj = dense_layer(x_proj, units=x_hidden, activation=self.activation,
                         sparsity=self.sparsity[0], nonneg=self._nonneg, name='x_proj_0')
-        # final layer          
+        
+        ## FINAL LAYERS        
         x_proj = dense_layer(x_proj, units=self.nvecs, sparsity=self.sparsity[0], 
                              nonneg=self._nonneg, name='x_proj')
         y_proj = dense_layer(y_proj, units=self.nvecs, sparsity=self.sparsity[1], 
@@ -179,15 +185,19 @@ class DeepCCA(object):
     def _train_op(self, loss, learn_rate):
         """
         Clipping:
-        #gvs = optimizer.compute_gradients(loss)
-        #clipped_gvs = [(tf.clip_by_value(grad, -clip_value, clip_value), var) for grad, var in gvs]
-        #train_op = optimizer.apply_gradients(clipped_gvs)
+            optimizer = tf.train.AdamOptimzer(learning_rate=learn_rate)
+            gvs = optimizer.compute_gradients(loss)
+            clipped_gvs = [(tf.clip_by_value(grad, -clip_value, clip_value), var) for grad, var in gvs]
+            train_op = optimizer.apply_gradients(clipped_gvs)
         """      
         optimizer = tf.train.AdamOptimizer(learning_rate=learn_rate)
         train_op = optimizer.minimize(loss)
         return train_op
 
     def fit(self, x, y, nb_epoch=1000, batch_size=32, learn_rate=1e-4):
+        """
+        Fit CCA model on data
+        """
         x_array, y_array = self._process_inputs(x, y)
 
         x_place = tf.placeholder(tf.float32, shape=(None, x_array.shape[-1]), name='x_place')
