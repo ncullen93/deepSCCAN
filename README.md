@@ -1,13 +1,5 @@
 # Deep CCA for Neuroimaging
 
-## TO-DO
-- finalize+test hyper-parameter optimization code
-- finalize deep+conv multivariate regression code
-- multi-objective to make hidden layers correlated also?
-- better example for conv cca (and deep cca too)
-- include fancy_impute algorithms
-- include confounds code (residuals of linear model)
-- include batch effects (ComBat) code
 
 ## Overview
 
@@ -28,6 +20,15 @@ This repository contains the following models:
 		- Use convolutional neural networks to learn components
 
 There is also a hyper-optimization algorithm using the Tree of Parzen Estimator algorithm for determining optimal hyper-parameters, which can then be passed into any cca function. It is in `hyperInit.py`.
+
+
+## Wall Clock Timing
+
+Sparse CCA:
+
+MNIST (54k samples w/ 374 Features)
+-----------------------------------
+CPU: 
 
 
 ## Installation Steps

@@ -15,9 +15,13 @@ from deep_cca import DeepCCA
 from conv_cca import ConvCCA
 
 
-class HyperInit(object):
+class HyperOptimizer(object):
 
-    def __init__(self):
+    def __init__(self, model, hyper_space):
+        self.model = model
+        self.hyper_space = hyper_space
+
+    def fit(self, x, y, x_val, y_val):
         pass
 
 def hyperInit(x, y, hyper_space, nvecs=1, x_val=None, y_val=None, 

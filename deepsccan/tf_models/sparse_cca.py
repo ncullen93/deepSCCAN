@@ -53,6 +53,11 @@ def l1l2_regularizer(l1_penalty, l2_penalty):
     return l1l2
 
 
+def projection_correlations(x, y):
+    corr_vals = [scipy.stats.pearsonr(x[:,i], y[:,i])[0] for i in range(x.shape[-1])]
+    return corr_vals
+
+
 def matrix_deflation(X_curr, Y_curr, X_orig, Y_orig, u, v):
     """
     Deflate matrices and return new ones
@@ -94,22 +99,23 @@ class SparseCCA(object):
 
         self._nonneg = nonneg
         self._deflation = deflation
-        tf.reset_default_graph()
-        self._sess = tf.Session()
+
 
     def _parse_activation(self, act_input):
+        activation_map = {
+            'LINEAR' : None,
+            'SIGMOID' : tf.nn.sigmoid,
+            'RELU' : tf.nn.relu,
+            'ELU' : tf.nn.elu
+        }
         if not isinstance(act_input, str):
             act_output = act_input 
         else:
-            act_input = act_input.upper()
-            if act_input == 'LINEAR':
+            try:
+                act_output = activation_map[act_input.upper()]
+            except:
                 act_output = None
-            elif act_input == 'SIGMOID':
-                act_output = tf.nn.sigmoid
-            elif act_input == 'RELU':
-                act_output = tf.nn.relu
-            elif act_input == 'ELU':
-                act_output = tf.nn.elu
+
         return act_output
 
     def _process_inputs(self, x_array, y_array):
@@ -136,24 +142,27 @@ class SparseCCA(object):
         # projection covariance matrix
         covar_mat = tf.abs(tf.matmul(tf.transpose(x_proj), y_proj))
 
-        # upper triangle sum
-        ux,uy = np.triu_indices(self.nvecs, k=1)
-        u_idxs = [[aa,bb] for aa,bb in zip(ux,uy)]
-        upper_loss = tf.reduce_sum(tf.gather_nd(covar_mat, u_idxs))
+        if not self._deflation:
+            # diagonal sum
+            diag_loss = tf.reduce_sum(tf.diag_part(covar_mat))
 
-        # lower triangle sum
-        lx, ly = np.tril_indices(self.nvecs, k=-1)
-        l_idxs = [[aa,bb] for aa,bb in zip(lx,ly)]
-        lower_loss = tf.reduce_sum(tf.gather_nd(covar_mat, l_idxs))
+            # upper triangle sum
+            ux,uy = np.triu_indices(self.nvecs, k=1)
+            u_idxs = [[aa,bb] for aa,bb in zip(ux,uy)]
+            upper_loss = tf.reduce_sum(tf.gather_nd(covar_mat, u_idxs))
 
-        # diagonal sum
-        diag_loss = tf.reduce_sum(tf.diag_part(covar_mat))
+            # lower triangle sum
+            lx, ly = np.tril_indices(self.nvecs, k=-1)
+            l_idxs = [[aa,bb] for aa,bb in zip(lx,ly)]
+            lower_loss = tf.reduce_sum(tf.gather_nd(covar_mat, l_idxs))
 
-        total_loss = diag_loss + lower_loss + upper_loss
+            total_loss = -1.*diag_loss + lower_loss + upper_loss
+        else:
+            total_loss = -tf.reduce_sum(covar_mat)
 
         if self.sparsity[0] > 0. or self.sparsity[1] > 0.:
             reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-            total_loss = tf.add(total_loss, tf.add_n(reg_losses))
+            total_loss = total_loss + tf.add_n(reg_losses)
 
         return total_loss
 
@@ -169,6 +178,8 @@ class SparseCCA(object):
         return train_op
 
     def fit(self, x, y, nb_epoch=1000, batch_size=32, learn_rate=1e-4):
+        tf.reset_default_graph()
+        self._sess = tf.Session()
         x_array, y_array = self._process_inputs(x, y)
 
         x_place = tf.placeholder(tf.float32, shape=(None, x_array.shape[-1]), name='x_place')
@@ -192,6 +203,8 @@ class SparseCCA(object):
             y_array_orig = y_array.copy()
             component_loops = self.nvecs
         else:
+            x_array_orig = x_array
+            y_array_orig = y_array
             component_loops = 1
 
         for c_idx in range(component_loops):
@@ -225,11 +238,22 @@ class SparseCCA(object):
                 else:
                     self.x_components = xw
                     self.y_components = yw
-
+            x_proj = np.dot(x_array_orig, xw)
+            y_proj = np.dot(y_array_orig, yw)
+            corr_val = projection_correlations(x_proj, y_proj)
+            print('Corrs: ' , corr_val)
             ## matrix deflation if necessary
             if self._deflation:
                 x_array, y_array = matrix_deflation(x_array, y_array,
                                         x_array_orig, y_array_orig, xw, yw)
+    def evaluate(self, x, y):
+        x_array, y_array = self._process_inputs(x, y)
+
+        x_proj = np.dot(x_array, self.x_components)
+        y_proj = np.dot(y_array, self.y_components)
+        corr_vals = projection_correlations(x_proj, y_proj)
+        return corr_vals
+
 
 
 def generate_data(ncomps=2):
@@ -257,7 +281,7 @@ def generate_data(ncomps=2):
     return X.T, Y.T, v1, v2, u
 
 if __name__ == '__main__':
-    EXAMPLE = 'SYNTHETIC' # SYNTHETIC, FACES, MNIST, MNIST_SINGLE BRAIN
+    EXAMPLE = None # SYNTHETIC, FACES, MNIST, MNIST_SINGLE BRAIN
 
     if EXAMPLE == 'SYNTHETIC':
         x_array, y_array, v1, v2, u = generate_data()

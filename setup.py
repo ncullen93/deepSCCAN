@@ -1,7 +1,7 @@
 from distutils.core import setup
 
 setup(
-    name='deepSCCAN',
-    version='0.1dev',
-    packages=['deepSCCAN',]
+    name='deepsccan',
+    version='0.0.1',
+    packages=['deepsccan']
 )
