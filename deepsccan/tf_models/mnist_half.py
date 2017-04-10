@@ -4,7 +4,7 @@ left and right halves of MNSIT digits w/ Sparse CCA
 """
 import numpy as np
 import matplotlib.pyplot as plt
-%matplotlib inline
+#%matplotlib inline
 # -------------------------------------------------------------------
 ## Load and Process Data
 
@@ -25,7 +25,7 @@ y_test = test_imgs[:,:,14:]
 
 # -------------------------------------------------------------------
 ## build, fit, and evaluate the Sparse CCA model
-
+from sparse_cca import SparseCCA
 # make model architecture
 cca_model = SparseCCA(nvecs=50, activation='linear', sparsity=(1e-4, 1e-4), deflation=False)
 
