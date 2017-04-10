@@ -1,6 +1,7 @@
 """
 Experiment to learn correlated representations of the
 left and right halves of MNSIT digits w/ Sparse CCA
+module add python/2.7.11   java/1.8.0_91  gcc/4.9.2 cuda/7.5 cudnn
 """
 import numpy as np
 import matplotlib.pyplot as plt
@@ -27,11 +28,14 @@ y_test = test_imgs[:,:,14:]
 ## build, fit, and evaluate the Sparse CCA model
 from sparse_cca import SparseCCA
 # make model architecture
-cca_model = SparseCCA(nvecs=50, activation='linear', sparsity=(1e-4, 1e-4), deflation=False)
-
+cca_model = SparseCCA(nvecs=50, activation='linear', sparsity=(1e-4, 1e-4), deflation=False,
+    device='/cpu:0')
+import time
+s = time.time()
 # fit model on data
-cca_model.fit(x=x_train, y=y_train, nb_epoch=10, batch_size=256, learn_rate=5e-4)
-
+cca_model.fit(x=x_train, y=y_train, nb_epoch=100, batch_size=256, learn_rate=5e-4)
+e = time.time()
+print('Time: ' , e-s)
 # evaluate model on validation data
 corr_vals = cca_model.evaluate(x=x_test, y=y_test)
-print('Mean Corr Vals: ', np.mean(corr_vals))
+#print('Mean Corr Vals: ', np.mean(corr_vals))
