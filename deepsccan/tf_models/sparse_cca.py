@@ -101,6 +101,7 @@ class SparseCCA(object):
         self._nonneg = nonneg
         self._deflation = deflation
         self._device = device
+        print(self._device)
 
 
     def _parse_activation(self, act_input):
@@ -130,10 +131,11 @@ class SparseCCA(object):
             units = 1
         else:
             units = self.nvecs
-        x_proj = dense_layer(x_place, units=units, sparsity=self.sparsity[0], 
-                             nonneg=self._nonneg, name='x_proj')
-        y_proj = dense_layer(y_place, units=units, sparsity=self.sparsity[1], 
-                             nonneg=self._nonneg, name='y_proj')
+        with tf.device(self._device):
+            x_proj = dense_layer(x_place, units=units, sparsity=self.sparsity[0], 
+                                 nonneg=self._nonneg, name='x_proj')
+            y_proj = dense_layer(y_place, units=units, sparsity=self.sparsity[1], 
+                                 nonneg=self._nonneg, name='y_proj')
         return x_proj, y_proj
 
     def _loss(self, x_proj, y_proj):
@@ -142,29 +144,30 @@ class SparseCCA(object):
         lower_loss = tf.reduce_sum(tf.matrix_band_part(tf.abs(covar_mat), -1, 0))
         """
         # projection covariance matrix
-        covar_mat = tf.abs(tf.matmul(tf.transpose(x_proj), y_proj))
+        with tf.device(self._device):
+            covar_mat = tf.abs(tf.matmul(tf.transpose(x_proj), y_proj))
 
-        if not self._deflation:
-            # diagonal sum
-            diag_loss = tf.reduce_sum(tf.diag_part(covar_mat))
+            if not self._deflation:
+                # diagonal sum
+                diag_loss = tf.reduce_sum(tf.diag_part(covar_mat))
 
-            # upper triangle sum
-            ux,uy = np.triu_indices(self.nvecs, k=1)
-            u_idxs = [[aa,bb] for aa,bb in zip(ux,uy)]
-            upper_loss = tf.reduce_sum(tf.gather_nd(covar_mat, u_idxs))
+                # upper triangle sum
+                ux,uy = np.triu_indices(self.nvecs, k=1)
+                u_idxs = [[aa,bb] for aa,bb in zip(ux,uy)]
+                upper_loss = tf.reduce_sum(tf.gather_nd(covar_mat, u_idxs))
 
-            # lower triangle sum
-            lx, ly = np.tril_indices(self.nvecs, k=-1)
-            l_idxs = [[aa,bb] for aa,bb in zip(lx,ly)]
-            lower_loss = tf.reduce_sum(tf.gather_nd(covar_mat, l_idxs))
+                # lower triangle sum
+                lx, ly = np.tril_indices(self.nvecs, k=-1)
+                l_idxs = [[aa,bb] for aa,bb in zip(lx,ly)]
+                lower_loss = tf.reduce_sum(tf.gather_nd(covar_mat, l_idxs))
 
-            total_loss = -1.*diag_loss + lower_loss + upper_loss
-        else:
-            total_loss = -tf.reduce_sum(covar_mat)
+                total_loss = -1.*diag_loss + lower_loss + upper_loss
+            else:
+                total_loss = -tf.reduce_sum(covar_mat)
 
-        if self.sparsity[0] > 0. or self.sparsity[1] > 0.:
-            reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
-            total_loss = total_loss + tf.add_n(reg_losses)
+            if self.sparsity[0] > 0. or self.sparsity[1] > 0.:
+                reg_losses = tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES)
+                total_loss = total_loss + tf.add_n(reg_losses)
 
         return total_loss
 
@@ -180,75 +183,75 @@ class SparseCCA(object):
         return train_op
 
     def fit(self, x, y, nb_epoch=1000, batch_size=32, learn_rate=1e-4):
-        with tf.device(self._device):
-            tf.reset_default_graph()
-            self._sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
-            x_array, y_array = self._process_inputs(x, y)
+        
+        tf.reset_default_graph()
+        self._sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
+        x_array, y_array = self._process_inputs(x, y)
 
-            x_place = tf.placeholder(tf.float32, shape=(None, x_array.shape[-1]), name='x_place')
-            y_place = tf.placeholder(tf.float32, shape=(None, y_array.shape[-1]), name='y_place')
+        x_place = tf.placeholder(tf.float32, shape=(None, x_array.shape[-1]), name='x_place')
+        y_place = tf.placeholder(tf.float32, shape=(None, y_array.shape[-1]), name='y_place')
 
-            x_proj, y_proj = self._inference(x_place, y_place)
-            total_loss = self._loss(x_proj, y_proj)
-            train_op = self._train_op(total_loss, learn_rate)
+        x_proj, y_proj = self._inference(x_place, y_place)
+        total_loss = self._loss(x_proj, y_proj)
+        train_op = self._train_op(total_loss, learn_rate)
 
-            normalize_ops = tf.get_collection('normalize_ops')
+        normalize_ops = tf.get_collection('normalize_ops')
 
-            self.x_components = np.zeros((x_array.shape[-1], self.nvecs))
-            self.y_components = np.zeros((y_array.shape[-1], self.nvecs))
+        self.x_components = np.zeros((x_array.shape[-1], self.nvecs))
+        self.y_components = np.zeros((y_array.shape[-1], self.nvecs))
 
-            nb_batches = int(np.ceil(x_array.shape[0]/batch_size))
+        nb_batches = int(np.ceil(x_array.shape[0]/batch_size))
 
+        self._sess.run(tf.global_variables_initializer())
+
+        if self._deflation:
+            x_array_orig = x_array.copy()
+            y_array_orig = y_array.copy()
+            component_loops = self.nvecs
+        else:
+            x_array_orig = x_array
+            y_array_orig = y_array
+            component_loops = 1
+
+        for c_idx in range(component_loops):
             self._sess.run(tf.global_variables_initializer())
 
-            if self._deflation:
-                x_array_orig = x_array.copy()
-                y_array_orig = y_array.copy()
-                component_loops = self.nvecs
-            else:
-                x_array_orig = x_array
-                y_array_orig = y_array
-                component_loops = 1
+            for epoch in range(nb_epoch):
+                e_loss = np.zeros(nb_batches)
+                for batch_idx in range(nb_batches):
+                    x_batch = x_array[batch_idx*batch_size:(batch_idx+1)*batch_size]
+                    y_batch = y_array[batch_idx*batch_size:(batch_idx+1)*batch_size]
 
-            for c_idx in range(component_loops):
-                self._sess.run(tf.global_variables_initializer())
+                    t_loss, _ = self._sess.run([total_loss, train_op],
+                                                        feed_dict={x_place:x_batch,
+                                                                   y_place:y_batch})
+                    #print('Loss %.02f' % (loss))
+                    e_loss[batch_idx] = t_loss
+                    self._sess.run(normalize_ops,feed_dict={x_place:x_batch,
+                                                            y_place:y_batch})
 
-                for epoch in range(nb_epoch):
-                    e_loss = np.zeros(nb_batches)
-                    for batch_idx in range(nb_batches):
-                        x_batch = x_array[batch_idx*batch_size:(batch_idx+1)*batch_size]
-                        y_batch = y_array[batch_idx*batch_size:(batch_idx+1)*batch_size]
+                print('Epoch Loss: %.03f' % np.mean(e_loss))
 
-                        t_loss, _ = self._sess.run([total_loss, train_op],
-                                                            feed_dict={x_place:x_batch,
-                                                                       y_place:y_batch})
-                        #print('Loss %.02f' % (loss))
-                        e_loss[batch_idx] = t_loss
-                        self._sess.run(normalize_ops,feed_dict={x_place:x_batch,
-                                                                y_place:y_batch})
-
-                    print('Epoch Loss: %.03f' % np.mean(e_loss))
-
-                ## get components and projects
-                with tf.variable_scope('', reuse=True):
-                    xw = self._sess.run(tf.get_variable('x_proj/kernel'))
-                    yw = self._sess.run(tf.get_variable('y_proj/kernel'))
-                    xw = xw / np.sqrt(np.sum(xw**2) + 1e-12)
-                    yw = yw / np.sqrt(np.sum(yw**2) + 1e-12)
-                    if self._deflation:
-                        self.x_components[:,c_idx] = xw.flatten()
-                        self.y_components[:,c_idx] = yw.flatten()
-                    else:
-                        self.x_components = xw
-                        self.y_components = yw
-                x_proj = np.dot(x_array_orig, xw)
-                y_proj = np.dot(y_array_orig, yw)
-                corr_val = projection_correlations(x_proj, y_proj)
-                print('Corrs: ' , corr_val)
-                ## matrix deflation if necessary
+            ## get components and projects
+            with tf.variable_scope('', reuse=True):
+                xw = self._sess.run(tf.get_variable('x_proj/kernel'))
+                yw = self._sess.run(tf.get_variable('y_proj/kernel'))
+                xw = xw / np.sqrt(np.sum(xw**2) + 1e-12)
+                yw = yw / np.sqrt(np.sum(yw**2) + 1e-12)
                 if self._deflation:
-                    x_array, y_array = matrix_deflation(x_array, y_array,
-                                            x_array_orig, y_array_orig, xw, yw)
+                    self.x_components[:,c_idx] = xw.flatten()
+                    self.y_components[:,c_idx] = yw.flatten()
+                else:
+                    self.x_components = xw
+                    self.y_components = yw
+            x_proj = np.dot(x_array_orig, xw)
+            y_proj = np.dot(y_array_orig, yw)
+            corr_val = projection_correlations(x_proj, y_proj)
+            print('Corrs: ' , corr_val)
+            ## matrix deflation if necessary
+            if self._deflation:
+                x_array, y_array = matrix_deflation(x_array, y_array,
+                                        x_array_orig, y_array_orig, xw, yw)
     def evaluate(self, x, y):
         x_array, y_array = self._process_inputs(x, y)
 
