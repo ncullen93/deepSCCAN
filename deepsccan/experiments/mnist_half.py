@@ -4,7 +4,6 @@ left and right halves of MNSIT digits w/ Sparse CCA
 """
 import numpy as np
 import matplotlib.pyplot as plt
-%matplotlib inline
 # -------------------------------------------------------------------
 ## Load and Process Data
 
