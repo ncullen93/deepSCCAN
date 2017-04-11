@@ -187,12 +187,13 @@ class SparseCCA(BaseEstimator):
         return train_op
 
     def fit(self, X, y, nb_epoch=None, batch_size=None):
-        print('Train shape: ', X.shape)
         if nb_epoch is not None:
             self.nb_epoch = nb_epoch
         if batch_size is not None:
             self.batch_size = batch_size
-        print('Fitting - Sparsity:' , self.sparsity )
+
+        if self.deflation:
+            self.nb_epoch = int(self.nb_epoch / self.ncomponents)
         ## parameter validation
         self.activation = self._parse_activation(self.activation)
         if not isinstance(self.sparsity, list) and not isinstance(self.sparsity, tuple):
@@ -290,7 +291,6 @@ class SparseCCA(BaseEstimator):
         pass
 
     def evaluate(self, X, y):
-        print('Eval shape: ' , X.shape)
         x_array, y_array = self._process_inputs(X, y)
         x_proj = np.dot(x_array, self.x_components_)
         y_proj = np.dot(y_array, self.y_components_)

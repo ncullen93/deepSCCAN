@@ -1,0 +1,5 @@
+deepsccan/__init__.py
+deepsccan.egg-info/PKG-INFO
+deepsccan.egg-info/SOURCES.txt
+deepsccan.egg-info/dependency_links.txt
+deepsccan.egg-info/top_level.txt

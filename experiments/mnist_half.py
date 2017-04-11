@@ -3,11 +3,15 @@ Experiment to learn correlated representations of the
 left and right halves of MNSIT digits w/ Sparse CCA
 """
 import numpy as np
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
+
+from keras.datasets import mnist
+from deepsccan.models import SparseCCA
+from sklearn.model_selection import PredefinedSplit, GridSearchCV
+
 # -------------------------------------------------------------------
 ## Load and Process Data
 
-from keras.datasets import mnist
 (train_imgs, train_lbls), (test_imgs, test_lbls) = mnist.load_data()
 
 # standardization to zero mean and unit variance
@@ -24,13 +28,13 @@ y_test = test_imgs[:,:,14:]
 ## build, fit, and evaluate the Sparse CCA model
 
 # make model architecture
-cca_model = SparseCCA(nvecs=50, nb_epoch=10)
+cca_model = SparseCCA(ncomponents=50, nb_epoch=10)
 
 # make hyper-param grid
 param_grid = {
     'learn_rate': [1e-3, 1e-4, 1e-5],
     #'nb_epoch': [10],
-    'sparsity': [1, 0.1, 1e-2, 1e-4],
+    'sparsity': [1, 1e-2, 1e-5],
     'deflation': [False, True]
 }
 
@@ -40,7 +44,12 @@ cv = PredefinedSplit(test_fold=test_fold)
 
 # instantiate grid search model
 grid_model = GridSearchCV(cca_model, param_grid=param_grid, cv=cv,
-                n_jobs=1, verbose=0)
+                n_jobs=1, verbose=2)
 
 grid_model.fit(x_train, y_train)
+print('Finished')
+print(grid_model.best_score_)
+print(grid_model.best_params_)
+
+
 
